@@ -1,5 +1,6 @@
 import boto3
 from math import ceil
+from canary_to_primary import alb_weight_updation, update_primary_service_td, ch_canary_capacity
 
 
 ##Inputs from Jenkins
@@ -7,7 +8,9 @@ from math import ceil
 region = 'ap-south-1'
 cluster_name = 'spring3'
 canary_service = "canary_tomcat"
-percent_increase = 45
+primary_service = "tomcat"
+percent_increase = 100
+wish_to_switch_to_primary = False
 
 session = boto3.session.Session(region_name=region)
 
@@ -23,14 +26,13 @@ lb = elb.describe_load_balancers()
 ##Cluster ARN
 cluster = 'arn:aws:ecs:{}:{}:cluster/{}'.format(region,id['Account'],cluster_name)
 
-
 ###Function to update canary service
 def primary_ecs(*args):
-    primary_service = args[0].split('_',1)
+    global primary_service
     primary_service_details = ecs.describe_services(
         cluster = args[2],
         services=[
-            primary_service[1]
+            primary_service
         ],
     )
     primary_service_scalable_targets = ecs_auto_scaling.describe_scalable_targets(
@@ -46,7 +48,7 @@ def primary_ecs(*args):
 
     canary_desired = int(ceil((args[1] / 100) * primary_service_desired))
     canary_min = canary_desired
-    canary_max = int(ceil((args[1] / 100) * primary_service_max))
+    canary_max = int(ceil((args[1] / 100) * primary_service_max) * 3)
 
     ###Update Canary service
 
@@ -74,15 +76,12 @@ def primary_ecs(*args):
             args[0]
         ],
     )
-
     canary_tg_arn = canary_service_details['services'][0]['loadBalancers'][0]['targetGroupArn']
     
-
     return canary_tg_arn, primary_tg
 
 canary_tg, primary_tg = primary_ecs(canary_service, percent_increase,cluster)
 
-print(canary_tg, primary_tg)
 
 
 ###Function to update TGs associated with Canary ECS service
@@ -132,4 +131,14 @@ def tg_update(*args):
                 ]
             )
 
-tg_update(canary_tg, primary_tg)
+    return rule_arns
+
+rule_arns = tg_update(canary_tg, primary_tg)
+
+
+if percent_increase == 100 and wish_to_switch_to_primary == True:
+    update_primary_service_td(region,cluster,canary_service,primary_service)
+    alb_weight_updation(region,rule_arns,primary_tg,canary_tg)
+    ch_canary_capacity(region,rule_arns,primary_tg,canary_tg)
+else:
+    print(f"Traffic to be passed to canary is {percent_increase}%")
