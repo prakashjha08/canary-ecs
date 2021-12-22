@@ -6,11 +6,20 @@ from time import sleep
 def update_primary_service_td(region,cluster,canary_service,primary_service):
     session = boto3.session.Session(region_name = region)
     ecs = session.client('ecs')
+    waiter = ecs.get_waiter('services_stable')
+
 
     canary_task_definition = ecs.describe_services(
         cluster = cluster,
         services = [
             canary_service,
+        ]
+    )
+
+    primary_service_task_definition = ecs.describe_services(
+        cluster = cluster,
+        services = [
+            primary_service,
         ]
     )
 
@@ -21,7 +30,35 @@ def update_primary_service_td(region,cluster,canary_service,primary_service):
         forceNewDeployment = True
     )
 
-    print(f"Updated primary service with image {primary_task_definition_update['service']['taskDefinition']}")
+    try:
+
+        waiter.wait(
+        cluster = cluster,
+        services = [
+            primary_service,
+        ],
+        WaiterConfig={
+            'Delay': 15,
+            'MaxAttempts': 20
+        }
+        )
+        rollback = False
+        print(f"Updated primary service with image {primary_task_definition_update['service']['taskDefinition']}")
+
+    except Exception as e:
+        rollback = True
+    
+    if rollback:
+        primary_task_definition_update = ecs.update_service(
+        cluster = cluster,
+        service = primary_service,
+        taskDefinition = primary_service_task_definition['services'][0]['taskDefinition'],
+        forceNewDeployment = True
+        )
+
+        print(f"Primary service is still using Task definition {primary_service_task_definition['services'][0]['taskDefinition']}")
+
+    return rollback
 
 ##Update ALB weight to 100 for primary
 

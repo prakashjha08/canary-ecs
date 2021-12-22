@@ -1,4 +1,5 @@
 import boto3
+from time import sleep
 from math import ceil
 from canary_to_primary import alb_weight_updation, update_primary_service_td, ch_canary_capacity
 
@@ -10,7 +11,7 @@ cluster_name = 'spring3'
 canary_service = "canary_tomcat"
 primary_service = "tomcat"
 percent_increase = 100
-wish_to_switch_to_primary = False
+wish_to_switch_to_primary = True
 
 session = boto3.session.Session(region_name=region)
 
@@ -108,37 +109,44 @@ def tg_update(*args):
             if any(args[0].split('/',2)[1] in string for string in [str(z) for y in (x.values() for x in rule['Actions'][0]['ForwardConfig']['TargetGroups']) for z in y]):
                 rule_arns.append(rule['RuleArn'])
 
-    for i in rule_arns:
-        response = elb.modify_rule(
-                RuleArn=i,
-                
-                Actions=[
-                    {
-                        'Type': 'forward',
-                        'ForwardConfig': {
-                            'TargetGroups': [
-                            {
-                                'TargetGroupArn': args[1],
-                                'Weight': 100 - percent_increase
-                            },
-                            {
-                                'TargetGroupArn': args[0],
-                                'Weight': percent_increase
-                            },
-                        ],
+    j = 0
+    while j <= percent_increase:
+        for i in rule_arns:
+            elb.modify_rule(
+                    RuleArn=i,
+                    
+                    Actions=[
+                        {
+                            'Type': 'forward',
+                            'ForwardConfig': {
+                                'TargetGroups': [
+                                {
+                                    'TargetGroupArn': args[1],
+                                    'Weight': 100 - j
+                                },
+                                {
+                                    'TargetGroupArn': args[0],
+                                    'Weight': j
+                                },
+                            ],
                         }
                     }
                 ]
             )
-
+            print("waiting for 5s")
+            sleep(1)
+            print(f"Traffic moved by {j}% to primary tg - {primary_tg.split('/')[1]} on rule {i}")
+        j += 5
     return rule_arns
 
 rule_arns = tg_update(canary_tg, primary_tg)
 
 
 if percent_increase == 100 and wish_to_switch_to_primary == True:
-    update_primary_service_td(region,cluster,canary_service,primary_service)
-    alb_weight_updation(region,rule_arns,primary_tg,canary_tg)
-    ch_canary_capacity(region,rule_arns,primary_tg,canary_tg)
+    rollback = update_primary_service_td(region,cluster,canary_service,primary_service)
+    print(rollback)
+    if rollback == False:
+        alb_weight_updation(region,rule_arns,primary_tg,canary_tg)
+        ch_canary_capacity(region,cluster,canary_service)
 else:
     print(f"Traffic to be passed to canary is {percent_increase}%")
