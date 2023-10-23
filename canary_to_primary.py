@@ -118,13 +118,13 @@ def ch_canary_capacity(region,cluster,canary_service):
         cluster = cluster,
         service = canary_service,
         forceNewDeployment = True,
-        desiredCount=1
+        desiredCount=2
     )
 
     ecs_auto_scaling.register_scalable_target(
         ServiceNamespace='ecs',
         ResourceId=(canary_service_details['services'][0]['serviceArn']).split(':')[5],
         ScalableDimension='ecs:service:DesiredCount',
-        MinCapacity=1,
-        MaxCapacity=1,
+        MinCapacity=2,
+        MaxCapacity=2,
     )
