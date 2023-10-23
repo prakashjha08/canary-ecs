@@ -6,12 +6,24 @@ from canary_to_primary import alb_weight_updation, update_primary_service_td, ch
 
 ##Inputs from Jenkins
 
-region = 'ap-south-1'
-cluster_name = 'spring3'
-canary_service = "canary_tomcat"
-primary_service = "tomcat"
-percent_increase = 100
-wish_to_switch_to_primary = True
+import argparse
+parser = argparse.ArgumentParser(description="Arguments for canary deployment")
+parser.add_argument("--region")
+parser.add_argument("--cluster_name")
+parser.add_argument("--canary_service")
+parser.add_argument("--primary_service")
+parser.add_argument("--percent_increase")
+parser.add_argument("--wish_to_switch_to_primary")
+
+args = parser.parse_args()
+
+# Access the values of the parsed arguments
+region = args.region
+cluster_name = args.cluster_name
+canary_service = args.canary_service
+primary_service = args.primary_service
+percent_increase = int(args.percent_increase)
+wish_to_switch_to_primary = args.wish_to_switch_to_primary
 
 session = boto3.session.Session(region_name=region)
 
@@ -20,6 +32,8 @@ ecs = session.client('ecs')
 ecs_auto_scaling = session.client('application-autoscaling')
 sts = session.client('sts')
 id = sts.get_caller_identity()
+waiter = ecs.get_waiter('services_stable')
+
 
 lb = elb.describe_load_balancers()
 
@@ -47,9 +61,9 @@ def primary_ecs(*args):
 
     primary_tg = primary_service_details['services'][0]['loadBalancers'][0]['targetGroupArn']
 
-    canary_desired = int(ceil((args[1] / 100) * primary_service_desired))
+    canary_desired = 2 if int(ceil((args[1] / 100) * primary_service_desired)) < 2 else int(ceil((args[1] / 100) * primary_service_desired))
     canary_min = canary_desired
-    canary_max = int(ceil((args[1] / 100) * primary_service_max) * 3)
+    canary_max = 4 if int(ceil((args[1] / 100) * primary_service_max)) < 4 else int(ceil((args[1] / 100) * primary_service_max))
 
     ###Update Canary service
 
@@ -98,23 +112,35 @@ def tg_update(*args):
 
     for j in listener['Listeners']:
         listener_arns.append(j['ListenerArn'])
-
+    # print(listener_arns)
     rule_arns = []
     for i in listener_arns:
         rules = elb.describe_rules(
             ListenerArn = i
         )
 
-        for rule in rules['Rules']:
-            if any(args[0].split('/',2)[1] in string for string in [str(z) for y in (x.values() for x in rule['Actions'][0]['ForwardConfig']['TargetGroups']) for z in y]):
-                rule_arns.append(rule['RuleArn'])
+        for i in listener_arns:
+            rules = elb.describe_rules(
+                ListenerArn = i
+            )
+            for rule in rules['Rules']:
+                    if rule["Actions"][0]["Type"] != "fixed-response":
+                        if any(args[0].split('/',2)[1] in string for string in [str(z) for y in (x.values() for x in rule['Actions'][0]['ForwardConfig']['TargetGroups']) for z in y]) :
+                            rule_arns.append(rule['RuleArn'])
+                            for tg in rule['Actions'][0]['ForwardConfig']['TargetGroups']:
+                                if tg['TargetGroupArn'] == args[0]:
+                                    j = tg['Weight']
+                                    print("Current weight on canary is: ",j)
 
-    j = 0
-    while j <= percent_increase:
-        for i in rule_arns:
+    for i in rule_arns:
+        rule_arn_details = elb.describe_rules(
+            RuleArns=[
+                i,
+            ]
+        )
+        if rule_arn_details["Rules"][0]["Actions"][0]["Type"] == "forward":
             elb.modify_rule(
                     RuleArn=i,
-                    
                     Actions=[
                         {
                             'Type': 'forward',
@@ -133,13 +159,27 @@ def tg_update(*args):
                     }
                 ]
             )
-            print("waiting for 5s")
-            sleep(1)
-            print(f"Traffic moved by {j}% to primary tg - {primary_tg.split('/')[1]} on rule {i}")
-        j += 5
+        print(f"Traffic moved by {j}% to primary tg - {primary_tg.split('/')[1]} on rule {i}")
+
     return rule_arns
 
-rule_arns = tg_update(canary_tg, primary_tg)
+try:
+    waiter.wait(
+    cluster = cluster,
+    services = [
+        canary_service,
+    ],
+    WaiterConfig={
+        'Delay': 15,
+        'MaxAttempts': 20
+    }
+    )
+    print(f"${canary_service} is stable")
+    rule_arns = tg_update(canary_tg, primary_tg)
+
+except Exception as e:
+    print("Failed due to: ",e)
+    rule_arns = []
 
 
 if percent_increase == 100 and wish_to_switch_to_primary == True:
