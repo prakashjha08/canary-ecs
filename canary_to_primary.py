@@ -2,7 +2,7 @@ import boto3
 from time import sleep
 
 ##Update primary service with new Image from canary
-
+print("In diff func")
 def update_primary_service_td(region,cluster,canary_service,primary_service):
     session = boto3.session.Session(region_name = region)
     ecs = session.client('ecs')
@@ -39,7 +39,7 @@ def update_primary_service_td(region,cluster,canary_service,primary_service):
         ],
         WaiterConfig={
             'Delay': 15,
-            'MaxAttempts': 20
+            'MaxAttempts': 40
         }
         )
         rollback = False
