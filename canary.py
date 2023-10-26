@@ -3,9 +3,6 @@ from time import sleep
 from math import ceil
 from canary_to_primary import alb_weight_updation, update_primary_service_td, ch_canary_capacity
 
-
-##Inputs from Jenkins
-
 import argparse
 parser = argparse.ArgumentParser(description="Arguments for canary deployment")
 parser.add_argument("--region")
@@ -23,7 +20,7 @@ cluster_name = args.cluster_name
 canary_service = args.canary_service
 primary_service = args.primary_service
 percent_increase = int(args.percent_increase)
-wish_to_switch_to_primary = args.wish_to_switch_to_primary
+wish_to_switch_to_primary = args.wish_to_switch_to_primary.lower()
 
 session = boto3.session.Session(region_name=region)
 
@@ -130,7 +127,7 @@ def tg_update(*args):
                             for tg in rule['Actions'][0]['ForwardConfig']['TargetGroups']:
                                 if tg['TargetGroupArn'] == args[0]:
                                     j = tg['Weight']
-                                    print("Current weight on canary is: ",j)
+    print("Current weight on canary:", j)
 
     for i in rule_arns:
         rule_arn_details = elb.describe_rules(
@@ -148,22 +145,23 @@ def tg_update(*args):
                                 'TargetGroups': [
                                 {
                                     'TargetGroupArn': args[1],
-                                    'Weight': 100 - j
+                                    'Weight': 100 - percent_increase
                                 },
                                 {
                                     'TargetGroupArn': args[0],
-                                    'Weight': j
+                                    'Weight': percent_increase
                                 },
                             ],
                         }
                     }
                 ]
             )
-        print(f"Traffic moved by {j}% to primary tg - {primary_tg.split('/')[1]} on rule {i}")
+    print(f"{percent_increase}% traffic moved to canary tg")
 
     return rule_arns
 
 try:
+    print(f"Waiting for service {canary_service} to be stable")
     waiter.wait(
     cluster = cluster,
     services = [
@@ -171,18 +169,18 @@ try:
     ],
     WaiterConfig={
         'Delay': 15,
-        'MaxAttempts': 20
+        'MaxAttempts': 40
     }
     )
-    print(f"${canary_service} is stable")
+    print(f"{canary_service} is stable")
     rule_arns = tg_update(canary_tg, primary_tg)
 
 except Exception as e:
     print("Failed due to: ",e)
-    rule_arns = []
 
 
-if percent_increase == 100 and wish_to_switch_to_primary == True:
+if percent_increase == 100 and wish_to_switch_to_primary == "true":
+    print("inside if")
     rollback = update_primary_service_td(region,cluster,canary_service,primary_service)
     print(rollback)
     if rollback == False:
