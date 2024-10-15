@@ -2,7 +2,7 @@ import boto3
 from time import sleep
 
 ##Update primary service with new Image from canary
-print("In diff func")
+print("Changing canary to primary")
 def update_primary_service_td(region,cluster,canary_service,primary_service):
     session = boto3.session.Session(region_name = region)
     ecs = session.client('ecs')
@@ -29,21 +29,21 @@ def update_primary_service_td(region,cluster,canary_service,primary_service):
         taskDefinition = canary_task_definition['services'][0]['taskDefinition'],
         forceNewDeployment = True
     )
-
+    sleep(300)
     try:
-
-        waiter.wait(
-        cluster = cluster,
-        services = [
-            primary_service,
-        ],
-        WaiterConfig={
-            'Delay': 15,
-            'MaxAttempts': 40
-        }
-        )
-        rollback = False
-        print(f"Updated primary service with image {primary_task_definition_update['service']['taskDefinition']}")
+       
+       waiter.wait(
+        	cluster = cluster,
+        	services = [
+            		primary_service,
+        	],
+        	WaiterConfig={
+            	'Delay': 15,
+            	'MaxAttempts': 40
+        	}
+        	)
+       rollback = False
+       print(f"Updated primary service with image {primary_task_definition_update['service']['taskDefinition']}")
 
     except Exception as e:
         rollback = True
@@ -67,7 +67,7 @@ def alb_weight_updation(region,rule_arns,primary_tg,canary_tg):
     session = boto3.session.Session(region_name = region)
     elb = session.client('elbv2')
 
-    j = 5
+    j = 10
 
     while j < 101:
         for i in rule_arns:
@@ -91,11 +91,11 @@ def alb_weight_updation(region,rule_arns,primary_tg,canary_tg):
                     }
                 ]
             )
-            sleep(1)
-            print("waiting for 10s")
+            sleep(2)
+            print("waiting for 2s")
             print(f"Traffic moved by {j}% to primary tg - {primary_tg.split('/')[1]} on rule {i}")
 
-        j += 5
+        j += 10
 
     print(f"Successfully moved all traffic to Primary TG {primary_tg.split('/')[1]}")
         
@@ -118,13 +118,14 @@ def ch_canary_capacity(region,cluster,canary_service):
         cluster = cluster,
         service = canary_service,
         forceNewDeployment = True,
-        desiredCount=2
+        desiredCount=1
     )
-
+    print("Force deployed canary service")
     ecs_auto_scaling.register_scalable_target(
         ServiceNamespace='ecs',
         ResourceId=(canary_service_details['services'][0]['serviceArn']).split(':')[5],
         ScalableDimension='ecs:service:DesiredCount',
-        MinCapacity=2,
-        MaxCapacity=2,
+        MinCapacity=1,
+        MaxCapacity=1,
     )
+    print("Minimum and maximum count set to 1 for canary service")
