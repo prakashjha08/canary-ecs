@@ -50,7 +50,7 @@ def primary_ecs(*args):
     primary_service_scalable_targets = ecs_auto_scaling.describe_scalable_targets(
         ServiceNamespace = 'ecs',
         ResourceIds = [
-            (primary_service_details['services'][0]['serviceArn']).split(':')[5]
+            "service/{}/{}".format(cluster_name,primary_service_details['services'][0]['serviceArn'].split('/')[-1])
         ]
     )
     primary_service_desired = int(primary_service_details['services'][0]['desiredCount'])
@@ -70,13 +70,11 @@ def primary_ecs(*args):
         desiredCount=canary_desired
     )
 
-    canary_resource_id = ((primary_service_details['services'][0]['serviceArn']).split(':')[5]).split('/')
-    canary_resource_id[2] = args[0]
-
+    canary_resource_id = "service/{}/{}".format(args[2].split('/')[-1],args[0])
 
     ecs_auto_scaling.register_scalable_target(
         ServiceNamespace='ecs',
-        ResourceId='/'.join(canary_resource_id),
+        ResourceId=canary_resource_id,
         ScalableDimension='ecs:service:DesiredCount',
         MinCapacity=canary_min,
         MaxCapacity=canary_max,
@@ -102,29 +100,29 @@ def tg_update(*args):
     listener_primary_service = elb.describe_target_groups(
     TargetGroupArns = [args[1]]
     )
-
+    print(listener_primary_service)
     listener = elb.describe_listeners(
         LoadBalancerArn = listener_primary_service['TargetGroups'][0]['LoadBalancerArns'][0]
     )
 
     for j in listener['Listeners']:
         listener_arns.append(j['ListenerArn'])
-    # print(listener_arns)
+    print("LISTENER:",listener_arns)
     rule_arns = []
     for i in listener_arns:
         rules = elb.describe_rules(
             ListenerArn = i
         )
-
         for i in listener_arns:
             rules = elb.describe_rules(
                 ListenerArn = i
             )
             for rule in rules['Rules']:
-                    if rule["Actions"][0]["Type"] != "fixed-response":
+                    if rule["Actions"][0]["Type"] == "forward":
                         if any(args[0].split('/',2)[1] in string for string in [str(z) for y in (x.values() for x in rule['Actions'][0]['ForwardConfig']['TargetGroups']) for z in y]) :
-                            rule_arns.append(rule['RuleArn'])
                             for tg in rule['Actions'][0]['ForwardConfig']['TargetGroups']:
+                                if tg['TargetGroupArn'] == args[1]:
+                                    rule_arns.append(rule['RuleArn'])
                                 if tg['TargetGroupArn'] == args[0]:
                                     j = tg['Weight']
     print("Current weight on canary:", j)
@@ -174,15 +172,13 @@ try:
     )
     print(f"{canary_service} is stable")
     rule_arns = tg_update(canary_tg, primary_tg)
-
 except Exception as e:
     print("Failed due to: ",e)
 
-
 if percent_increase == 100 and wish_to_switch_to_primary == "true":
-    print("inside if")
+    print("Waiting for primary service to be stable")
     rollback = update_primary_service_td(region,cluster,canary_service,primary_service)
-    print(rollback)
+    print("Rollback - ",rollback)
     if rollback == False:
         alb_weight_updation(region,rule_arns,primary_tg,canary_tg)
         ch_canary_capacity(region,cluster,canary_service)
